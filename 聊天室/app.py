@@ -4,9 +4,23 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 import json
 import os
 import re
+import hashlib
 import math
 import random
 from datetime import datetime, timedelta
+import requests
+# 抑制 SSL 警告
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# 导入OpenAI库
+from openai import OpenAI
+
+# 配置OpenAI客户端
+api_key = "sk-gzxavqqlvlxdtlxdnvvisgruvsktvdfwlqmdqfstmsbbsxuj"
+base_url = "https://api.siliconflow.cn/v1/"
+model_name = "Qwen/Qwen2.5-7B-Instruct"
+
+client = OpenAI(api_key=api_key, base_url=base_url)
 
 # 存储川小农的上下文记忆
 xiaonong_context = {}
@@ -14,6 +28,9 @@ xiaonong_context = {}
 xiaonong_online = True
 # 结束词列表
 END_WORDS = ['再见', '拜拜', '结束', '88', '再见了', '拜拜了']
+# 存储当前音乐播放状态（用于同步给所有用户）
+current_song = None
+music_playback_state = {'status': 'stopped', 'currentTime': 0}
 
 # 扩展的知识库 - 问题-答案对
 KNOWLEDGE_BASE = {
@@ -28,11 +45,11 @@ KNOWLEDGE_BASE = {
     },
     'school_campuses': {
         'keywords': ['校区', '地址', '位置', '在哪里', '三个校区', '所有校区', '校区分布'],
-        'response': '四川农业大学有三个校区：\n1. 雅安校区：位于雅安市雨城区新康路46号，是学校的主校区，环境优美，历史悠久，主要设有农学院、动物科技学院、林学院等传统优势学院。\n2. 成都校区：位于成都市温江区惠民路211号，是学校的重要教学科研基地，设有风景园林学院、资源学院、经济学院等，地理位置优越。\n3. 都江堰校区：位于都江堰市建设路288号，环境宜人，以水利水电学院、旅游学院、建筑与城乡规划学院等为主。'
+        'response': '四川农业大学有三个校区：\n1. 雅安校区：位于雅安市雨城区新康路46号，是学校的主校区，环境优美，历史悠久，主要设置有农学院、动物科技学院、林学院等传统优势学院。\n2. 成都校区：位于成都市温江区惠民路211号，是学校的重要教学科研基地，设有风景园林学院、资源学院、经济学院等，地理位置优越。\n3. 都江堰校区：位于都江堰市建设路288号，环境宜人，以水利水电学院、旅游学院、建筑与城乡规划学院等为主。'
     },
     'yaan_campus': {
         'keywords': ['雅安校区', '雅安校区地址', '雅安校区位置', '雅安市校区', '雨城区校区', '新康路校区'],
-        'response': '四川农业大学雅安校区位于雅安市雨城区新康路46号，是学校的主校区，环境优美，历史悠久，主要设有农学院、动物科技学院、林学院等传统优势学院。'
+        'response': '四川农业大学雅安校区位于雅安市雨城区新康路46号，是学校的主校区，环境优美，历史悠久，主要设置有农学院、动物科技学院、林学院等传统优势学院。'
     },
     'chengdu_campus': {
         'keywords': ['成都校区', '成都校区地址', '成都校区位置', '温江区校区', '惠民路校区'],
@@ -102,11 +119,11 @@ KNOWLEDGE_BASE = {
     },
     'school_international': {
         'keywords': ['国际合作', '国际交流', '留学生', '海外合作', '国际化'],
-        'response': '四川农业大学积极开展国际合作与交流，已与全球30多个国家和地区的100余所高校、科研机构建立了合作关系。学校每年选派优秀学生赴海外交流学习，同时接收来自世界各地的留学生。学校还参与了多个国际科研合作项目，在农业科技领域的国际影响力不断提升。'
+        'response': '四川农业大学开展国际合作与交流，已与全球30多个国家和地区的100余所高校、科研机构建立了合作关系。学校每年选派优秀学生赴海外交流学习，同时接收来自世界各地的留学生。学校还参与了多个国际科研合作项目，在农业科技领域的国际影响力不断提升。'
     },
     'school_employment': {
         'keywords': ['就业', '就业率', '毕业生', '就业去向', '就业质量'],
-        'response': '四川农业大学高度重视就业工作，毕业生就业质量稳步提升。近年来，学校本科生就业率一直保持在90%以上，研究生就业率接近100%。毕业生主要去向包括：科研院所、政府机关、企事业单位、高校、金融机构等。学校还积极推进创新创业教育，鼓励学生自主创业，培养了一批优秀的创业人才。'
+        'response': '四川农业大学重视就业工作，毕业生就业质量稳步提升。近年来，学校本科生就业率一直保持在90%以上，研究生就业率接近100%。毕业生主要去向包括：科研院所、政府机关、企事业单位、高校、金融机构等。学校还积极推进创新创业教育，鼓励学生自主创业，培养了一批优秀的创业人才。'
     },
     'school_facilities': {
         'keywords': ['设施', '校园设施', '图书馆', '体育馆', '宿舍', '食堂'],
@@ -114,7 +131,7 @@ KNOWLEDGE_BASE = {
     },
     'school_achievements': {
         'keywords': ['成就', '成果', '奖励', '荣誉', '贡献'],
-        'response': '四川农业大学在教学科研领域取得了丰硕成果：\n1. 科研奖励：获得国家科技进步奖、国家技术发明奖等国家级奖励20余项，省部级奖励300余项。\n2. 教学成果：获得国家级教学成果奖8项，省级教学成果奖70余项。\n3. 科研项目：承担国家重点研发计划、国家自然科学基金等国家级项目1000余项。\n4. 论文专利：每年发表SCI收录论文1000余篇，获得授权专利300余项。\n5. 社会服务：学校积极开展科技成果转化和社会服务，为地方经济社会发展做出了重要贡献。'
+        'response': '四川农业大学在教学科研领域取得了丰硕成果：\n1. 科研奖励：获得国家科技进步奖、国家技术发明奖等国家级奖励20余项，省部级奖励300余项。\n2. 教学成果：获得国家级教学成果奖8项，省级教学成果奖70余项。\n3. 科研项目：承担国家重点研发计划、国家自然科学基金等国家级项目1000余项。\n4. 论文专利：每年发表SCI收录论文1000余篇，获得授权专利300余项。\n5. 社会服务：学校开展科技成果转化和社会服务，为地方经济社会发展做出了重要贡献。'
     },
     'school_student_life': {
         'keywords': ['校园生活', '学生社团', '活动', '社团', '学生会'],
@@ -188,6 +205,54 @@ online_users = {}
 # 房间名称
 ROOM_NAME = 'general'
 
+# 用户数据文件路径
+USERS_FILE = 'users.json'
+
+# 加载用户数据
+def load_users():
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {'users': []}
+
+# 保存用户数据
+def save_users(users_data):
+    with open(USERS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(users_data, f, ensure_ascii=False, indent=2)
+
+# 密码哈希
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# 检查用户名是否存在
+def username_exists(username):
+    users_data = load_users()
+    return any(user['username'] == username for user in users_data['users'])
+
+# 验证用户密码
+def verify_user(username, password):
+    users_data = load_users()
+    for user in users_data['users']:
+        if user['username'] == username and user['password'] == hash_password(password):
+            return True
+    return False
+
+# 注册新用户
+def register_user(username, password):
+    users_data = load_users()
+    if username_exists(username):
+        return False, '用户名已存在'
+    
+    # 添加新用户
+    new_user = {
+        'username': username,
+        'password': hash_password(password),
+        'register_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    users_data['users'].append(new_user)
+    save_users(users_data)
+    return True, '注册成功'
+
 def load_config():
     """加载配置文件"""
     with open('config.json', 'r', encoding='utf-8') as f:
@@ -207,14 +272,51 @@ def serve_file(filename):
     # 对于其他文件，返回404错误
     return "文件不存在或无权访问", 404
 
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    
+    # 验证输入
+    if not username or not password:
+        return jsonify({'success': False, 'message': '用户名和密码不能为空'})
+    
+    # 验证用户名格式
+    if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9_]{2,20}$', username):
+        return jsonify({'success': False, 'message': '用户名只能包含中文、英文、数字和下划线，长度2-20个字符'})
+    
+    # 验证密码长度
+    if len(password) < 6:
+        return jsonify({'success': False, 'message': '密码长度不能少于6个字符'})
+    
+    # 注册用户
+    success, message = register_user(username, password)
+    return jsonify({'success': success, 'message': message})
+
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
     username = data.get('username')
+    password = data.get('password')
     
-    # 检查用户名是否已存在
+    # 验证输入
+    if not username or not password:
+        return jsonify({'success': False, 'message': '用户名和密码不能为空'})
+    
+    # 检查用户名是否已在线
     if username in online_users:
-        return jsonify({'success': False, 'message': '用户名已存在，请选择其他昵称'})
+        return jsonify({'success': False, 'message': '该用户已在线'})
+    
+    # 验证用户名和密码
+    users_data = load_users()
+    user_exists = any(user['username'] == username for user in users_data['users'])
+    
+    if not user_exists:
+        return jsonify({'success': False, 'message': '用户名不存在，请先注册'})
+    
+    if not verify_user(username, password):
+        return jsonify({'success': False, 'message': '密码错误'})
     
     return jsonify({'success': True, 'message': '登录成功'})
 
@@ -245,6 +347,36 @@ def handle_disconnect():
         leave_room(ROOM_NAME)
         print(f'用户 {disconnected_user} 已断开连接')
 
+@socketio.on('control_music')
+def handle_music_control(data):
+    """处理音乐控制命令"""
+    global current_song, music_playback_state
+    
+    # 检查是否有当前歌曲
+    if not current_song:
+        return
+    
+    # 更新播放状态
+    action = data.get('action')
+    if action == 'play':
+        music_playback_state['status'] = 'playing'
+    elif action == 'pause':
+        music_playback_state['status'] = 'paused'
+    elif action == 'stop':
+        music_playback_state['status'] = 'stopped'
+        music_playback_state['currentTime'] = 0
+    
+    # 更新当前播放时间（如果提供）
+    current_time = data.get('currentTime')
+    if current_time is not None:
+        music_playback_state['currentTime'] = current_time
+    
+    # 广播更新后的播放状态
+    emit('music_playback_update', {
+        'playback_state': music_playback_state,
+        'song_info': current_song
+    }, broadcast=True, room=ROOM_NAME)
+
 @socketio.on('join')
 def handle_join(data):
     username = data.get('username')
@@ -264,6 +396,7 @@ def handle_message(data):
     
     # 学校检测逻辑 - 移至最前面优先执行
     import sys
+    import requests
     print("="*50)
     print(f"开始检测学校关键词: {message}")
     
@@ -319,6 +452,78 @@ def handle_message(data):
         sys.stdout.flush()
         return
     
+    # 新闻指令处理逻辑
+    message_lower = message.lower()
+    if any(cmd in message_lower for cmd in ['@新闻', '@头条', '@60s']):
+        try:
+            print(f"触发新闻指令: {message}")
+            
+            # 模拟新闻数据（当API不可用时使用）
+            mock_news_data = {
+                'success': True,
+                'time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'data': [
+                    '教育部发布最新教育改革方案，强调素质教育的重要性',
+                    '科技巨头发布全新人工智能模型，性能提升30%',
+                    '国内多地迎来降温天气，专家提醒注意保暖',
+                    '体育赛事：国家队在国际比赛中获得优异成绩',
+                    '新能源汽车销量持续增长，市场份额突破30%',
+                    '文化节活动在各地举办，促进文化交流与传承',
+                    '医疗领域取得新突破，新型药物进入临床试验',
+                    '环保组织呼吁减少塑料使用，保护生态环境',
+                    '数字经济发展迅速，创造大量就业机会',
+                    '国际合作项目启动，推动全球可持续发展'
+                ]
+            }
+            
+            try:
+                # 尝试调用韩小韩API获取新闻
+                api_url = "https://api.vvhan.com/api/60s?type=json"
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+                response = requests.get(api_url, timeout=5, headers=headers, verify=False)
+                response.raise_for_status()
+                news_data = response.json()
+                print(f"API响应: {news_data}")
+                
+                # 如果API调用成功但数据不完整，使用模拟数据
+                if not news_data.get('success') or not news_data.get('data'):
+                    news_data = mock_news_data
+                    print("API数据不完整，使用模拟数据")
+                    
+            except Exception as api_error:
+                print(f"新闻API调用错误: {str(api_error)}")
+                print("使用模拟新闻数据")
+                news_data = mock_news_data
+            
+            # 构建新闻HTML内容
+            time_str = news_data.get('time', '')
+            news_list = news_data.get('data', [])
+            
+            news_html = f"📅 {time_str} 每天60秒读懂世界<br><br>"
+            for i, news in enumerate(news_list, 1):
+                news_html += f"{i}. {news}<br>"
+            
+            # 添加结尾标语
+            news_html += "<br>💡 哪怕微小的光也能照亮黑夜"
+            
+            # 发送新闻回复
+            emit('assistant_response', {
+                'username': '新闻助手',
+                'message': news_html
+            }, broadcast=True, room=ROOM_NAME)
+            print(f"发送新闻回复成功")
+            
+        except Exception as e:
+            print(f"新闻处理错误: {str(e)}")
+            emit('assistant_response', {
+                'username': '新闻助手',
+                'message': '新闻处理时发生错误，请稍后再试'
+            }, broadcast=True, room=ROOM_NAME)
+        sys.stdout.flush()
+        return
+    
     print("="*50)
     sys.stdout.flush()
     
@@ -335,14 +540,205 @@ def handle_message(data):
                 'movie_url': parsed_url
             }, broadcast=True, room=ROOM_NAME)
             return
+
+    # 处理天气查询命令
+    if message.startswith('@天气'):
+        # 提取城市名
+        parts = message.split(' ', 1)
+        if len(parts) > 1:
+            city = parts[1].strip()
+            if city:
+                try:
+                    # 使用wttr.in API（无需API Key）
+                    url = f"http://wttr.in/{city}?format=j1"
+                    response = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    # 检查API返回状态
+                    current_condition = data.get('current_condition', [])
+                    if current_condition:
+                        # 提取天气信息
+                        weather_data = current_condition[0]
+                        temp = weather_data.get('temp_C', '未知')
+                        weather = weather_data.get('weatherDesc', [{}])[0].get('value', '未知')
+                        wind_direction = weather_data.get('winddir16Point', '未知')
+                        humidity = weather_data.get('humidity', '未知')
+                        
+                        # 组装回复文本
+                        reply = f"🌤️ {city}天气预报🌤️\n" \
+                               f"当前温度: {temp}°C\n" \
+                               f"天气状况: {weather}\n" \
+                               f"风向: {wind_direction}\n" \
+                               f"湿度: {humidity}%"
+                        
+                        # 判断天气类型
+                        weather_type = 'default'
+                        weather_lower = weather.lower()
+                        
+                        if any(keyword in weather_lower for keyword in ['clear', 'sunny']):
+                            weather_type = 'sunny'
+                        elif any(keyword in weather_lower for keyword in ['cloudy', 'overcast', 'partly']):
+                            weather_type = 'cloudy'
+                        elif any(keyword in weather_lower for keyword in ['rain', 'drizzle', 'shower']):
+                            weather_type = 'rainy'
+                        elif any(keyword in weather_lower for keyword in ['snow', 'sleet', 'hail']):
+                            weather_type = 'snowy'
+                        elif any(keyword in weather_lower for keyword in ['fog', 'mist']):
+                            weather_type = 'foggy'
+                        elif any(keyword in weather_lower for keyword in ['thunderstorm', 'lightning']):
+                            weather_type = 'thunderstorm'
+                        
+                        # 发送天气查询结果和天气类型
+                        emit('weather_response', {
+                            'username': '气象小助手',
+                            'message': reply,
+                            'weather_type': weather_type
+                        }, broadcast=True, room=ROOM_NAME)
+                    else:
+                        reply = "抱歉，未能查询到该城市的天气，请检查城市名称是否正确。"
+                        # 发送天气查询结果（无天气类型）
+                        emit('assistant_response', {
+                            'username': '气象小助手',
+                            'message': reply
+                        }, broadcast=True, room=ROOM_NAME)
+                except requests.RequestException:
+                    reply = "抱歉，天气查询服务暂时不可用，请稍后再试。"
+                    # 发送天气查询结果（无天气类型）
+                    emit('assistant_response', {
+                        'username': '气象小助手',
+                        'message': reply
+                    }, broadcast=True, room=ROOM_NAME)
+            else:
+                reply = "请输入正确的格式，例如：@天气 成都"
+                # 发送天气查询结果（无天气类型）
+                emit('assistant_response', {
+                    'username': '气象小助手',
+                    'message': reply
+                }, broadcast=True, room=ROOM_NAME)
+        else:
+            reply = "请输入正确的格式，例如：@天气 成都"
+            # 发送天气查询结果（无天气类型）
+            emit('assistant_response', {
+                'username': '气象小助手',
+                'message': reply
+            }, broadcast=True, room=ROOM_NAME)
+        return
     
+    # 处理音乐点播命令
+    if message.startswith('@音乐'):
+        # 提取歌曲名
+        parts = message.split(' ', 1)
+        if len(parts) > 1:
+            song_name = parts[1].strip()
+            if song_name:
+                try:
+                    # 网易云音乐API搜索歌曲
+                    def search_netease_music(song_name):
+                        search_url = f"https://music.163.com/api/search/get?type=1&s={song_name}&offset=0&limit=1"
+                        headers = {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                        }
+                        try:
+                            search_response = requests.get(search_url, headers=headers, timeout=10)
+                            search_data = search_response.json()
+                            if search_data.get('code') == 200:
+                                songs = search_data.get('result', {}).get('songs', [])
+                                if songs:
+                                    song = songs[0]
+                                    song_id = song.get('id')
+                                    song_name = song.get('name')
+                                    artist = '/'.join([artist.get('name') for artist in song.get('artists', [])])
+                                    album = song.get('album', {}).get('name')
+                                    album_pic_url = song.get('album', {}).get('picUrl')
+                                    play_url = f"https://music.163.com/song/media/outer/url?id={song_id}.mp3"
+                                    return {
+                                        'song_id': song_id,
+                                        'song_name': song_name,
+                                        'artist': artist,
+                                        'album': album,
+                                        'album_pic_url': album_pic_url,
+                                        'play_url': play_url
+                                    }
+                        except Exception as e:
+                            print(f"网易云音乐搜索失败: {e}")
+                        return None
+                    
+                    # 搜索音乐
+                    music_info = search_netease_music(song_name)
+                    
+                    # 生成各平台搜索链接
+                    netease_url = f"https://music.163.com/#/search/m/?s={song_name}&type=1"
+                    qq_url = f"https://y.qq.com/n/ryqq/search?w={song_name}&t=song"
+                    kugou_url = f"https://www.kugou.com/yy/html/search.html#searchType=song&searchKeyWord={song_name}"
+                    
+                    # 构造HTML回复
+                    reply = f"为您搜索到歌曲 '{song_name}'：<br><br>"
+                    
+                    if music_info:
+                        # 添加歌曲信息
+                        reply += f"<div style='margin-bottom: 20px;'>"
+                        reply += f"<h4 style='margin: 5px 0;'>🎵 {music_info['song_name']} - {music_info['artist']}</h4>"
+                        if music_info['album_pic_url']:
+                            reply += f"<img src='{music_info['album_pic_url']}' style='width: 100px; height: 100px; border-radius: 5px; margin: 10px 0;'>"
+                        
+                        # 添加音乐播放控件
+                        reply += f"<div style='margin: 15px 0;'>"
+                        reply += f"<h5 style='margin: 5px 0;'>在线播放</h5>"
+                        reply += f"<audio controls style='width: 100%; max-width: 300px; margin: 10px 0;'>"
+                        reply += f"<source src='{music_info['play_url']}' type='audio/mpeg'>"
+                        reply += f"您的浏览器不支持音频播放功能。"
+                        reply += f"</audio>"
+                        reply += f"</div>"
+                        
+                        reply += f"<p style='font-size: 12px; color: #666; margin: 5px 0;'>专辑：{music_info['album']}</p>"
+                        reply += f"</div>"
+                    
+                    # 添加各平台链接
+                    reply += f"<h5 style='margin: 15px 0 10px 0;'>选择平台：</h5>"
+                    reply += f"🎵 <a href='{netease_url}' target='_blank' style='color: #31c27c; text-decoration: none; margin-right: 15px;'>网易云音乐</a>"
+                    reply += f"🎵 <a href='{qq_url}' target='_blank' style='color: #1da1f2; text-decoration: none; margin-right: 15px;'>QQ音乐</a>"
+                    reply += f"🎵 <a href='{kugou_url}' target='_blank' style='color: #ff6700; text-decoration: none;'>酷狗音乐</a><br><br>"
+                    
+                    reply += "提示：如果直接播放失败，可能是由于版权限制，请尝试点击平台链接播放。"
+                    
+                except Exception as e:
+                    print(f"音乐搜索错误: {e}")
+                    reply = "抱歉，音乐搜索服务暂时不可用，请稍后再试。"
+            else:
+                reply = "请输入正确的格式，例如：@音乐 小幸运"
+        else:
+            reply = "请输入正确的格式，例如：@音乐 小幸运"
+        
+        # 更新全局音乐播放状态
+        global current_song, music_playback_state
+        current_song = {
+            'song_name': music_info['song_name'],
+            'artist': music_info['artist'],
+            'album': music_info['album'],
+            'album_pic_url': music_info['album_pic_url'],
+            'play_url': music_info['play_url']
+        }
+        music_playback_state = {
+            'status': 'stopped',  # 初始状态为停止
+            'currentTime': 0
+        }
+        
+        # 发送音乐点播结果
+        emit('music_response', {
+            'username': '音乐小助手',
+            'song_info': current_song,
+            'playback_state': music_playback_state
+        }, broadcast=True, room=ROOM_NAME)
+        return
+
     # 全局变量
     global xiaonong_online
-    
+
     # 检查是否需要由川小农回复
     should_xiaonong_reply = False
     question = message
-    
+
     # 处理川小农相关逻辑
     if message.startswith('@川小农'):
         # 提取问题或指令
@@ -400,7 +796,7 @@ def handle_message(data):
                 del xiaonong_context[username]
         elif message.startswith('@川小农') and len(message.split()) == 1:
             # 只有@川小农，没有后续内容，回复打招呼
-            response = '你好呀！我是四川农业大学的AI小助手小美，有什么可以帮你的吗？😊'
+            response = '你好呀！我是四川农业大学的AI助手小美，有什么可以帮你的吗？😊'
         else:
             # 更新上下文历史
             user_history = xiaonong_context[username]['history']
@@ -631,44 +1027,63 @@ def handle_message(data):
                 
                 return prefix + base_response + suffix
             
-            # 未知问题处理函数（先定义，供后续调用）
+            # 未知问题处理函数（使用OpenAI API生成响应）
             def handle_unknown_question(question):
-                # 分析问题特征
-                has_question_mark = '?' in question or '？' in question
-                is_short = len(question) < 10
-                has_keywords = any(keyword in question for keywords in KNOWLEDGE_BASE.values() for keyword in keywords['keywords'])
-                
-                # 提供不同类型的未知问题回复
-                if is_short and not has_question_mark:
-                    responses = [
-                        "你能告诉我更多关于你想了解的内容吗？这样我能更好地帮助你！😊",
-                        "这个表述有点简短呢~ 能否请你详细说明一下你的问题？",
-                        "我不太确定你的意思，你是想了解四川农业大学的哪些方面呢？"
+                try:
+                    # 构建对话历史
+                    messages = [
+                        {
+                            "role": "system",
+                            "content": "你是四川农业大学的AI助手小美，专门回答关于四川农业大学的各种问题。请保持回答友好、专业，并使用简体中文。"
+                        }
                     ]
-                elif has_keywords:
-                    # 问题包含关键词但未匹配到
+                    
+                    # 添加最近的5条历史对话（如果有）
+                    if username in xiaonong_context and xiaonong_context[username]:
+                        for item in xiaonong_context[username][-5:]:  # 只保留最近5条对话
+                            messages.append(item)
+                    
+                    # 添加当前问题
+                    messages.append({
+                        "role": "user",
+                        "content": question
+                    })
+                    
+                    # 调用OpenAI API获取流式响应
+                    response = client.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        stream=True,
+                        temperature=0.7,
+                        max_tokens=1000
+                    )
+                    
+                    # 处理流式响应
+                    full_response = ""
+                    for chunk in response:
+                        if chunk.choices[0].delta.content:
+                            content = chunk.choices[0].delta.content
+                            full_response += content
+                            # 使用SSE协议返回部分响应
+                            emit('assistant_response_chunk', {
+                                'username': '川小农',
+                                'message': content,
+                                'final': False
+                            }, broadcast=True, room=ROOM_NAME)
+                    
+                    # 返回完整响应
+                    return full_response
+                    
+                except Exception as e:
+                    # 错误处理
+                    print(f"OpenAI API调用失败: {e}")
+                    # 提供备用回复
                     responses = [
-                        "我注意到你提到了一些关键词，但我还需要更具体的信息才能准确回答。你能详细说明一下你的问题吗？",
-                        "关于你提到的内容，我可能需要更多上下文。你是想了解四川农业大学的哪个具体方面呢？",
-                        "我理解你对这个话题感兴趣，但需要你提供更多细节，这样我才能给你最相关的信息。"
+                        "抱歉，我暂时无法连接到AI服务。你能稍后再试吗？",
+                        "当前AI服务不可用，请稍后再试。",
+                        "很抱歉，我现在无法回答这个问题，请稍后再试。"
                     ]
-                elif len(question) > 20:
-                    # 长问题但未匹配
-                    responses = [
-                        "你的问题很详细，不过我暂时无法提供完整答案。能否请你将问题拆分为几个小问题，这样我可以更好地为你解答？",
-                        "感谢你的详细提问。我目前的知识可能有限，但如果你能具体说明想了解四川农业大学的哪些方面，我会尽力帮助你！",
-                        "这个问题涉及的内容比较广泛，我建议我们可以从四川农业大学的某个具体方面开始讨论，比如学科建设、校园环境等。"
-                    ]
-                else:
-                    # 其他情况
-                    responses = [
-                        "抱歉，这个问题我暂时无法回答。不过我会继续学习，争取以后能为你提供更全面的帮助！😊",
-                        "这个问题有点难到我了~ 能否请你换个方式提问，或者告诉我你想了解四川农业大学的哪些方面呢？",
-                        "关于这个问题，我还需要更多信息。你能具体说明一下吗？或者你想了解四川农业大学的哪些情况？"
-                    ]
-                
-                # 随机选择一个回复，但保证一定的变化性
-                return random.choice(responses)
+                    return random.choice(responses)
             
             # 处理七言故事生成
             if any(cmd in question.lower() for cmd in ['生成七言', '写七言', '七言风格', '七言诗', '写首诗']):
@@ -773,7 +1188,7 @@ def handle_message(data):
                     '南大', '人大', '华科', '武大', '电子科大', '北航', '南航', '西交大', 
                     '哈工大', '华师', '华工', '西电', '上财', '央财', '北理', '南开', '天大',
                     '电子科技大学', '成电', '西财', '川大', '重大', '吉大', '山大', '厦大', 
-                    '兰大', '华西医科', '西南财大', '西南交大'
+                    '兰大', '华西мер', '西南财大', '西南交大'
                 ]
                 # 转换为小写以避免大小写敏感问题
                 all_school_keywords_lower = [kw.lower() for kw in all_school_keywords]

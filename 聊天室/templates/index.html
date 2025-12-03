@@ -64,6 +64,35 @@
             text-align: center;
             transition: transform 0.3s ease, box-shadow 0.3s ease;
         }
+        
+        /* 认证标签页样式 */
+        .auth-tabs {
+            display: flex;
+            margin-bottom: 20px;
+            border-radius: 10px;
+            overflow: hidden;
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+        
+        .auth-tab {
+            flex: 1;
+            padding: 10px;
+            background: none;
+            border: none;
+            color: var(--text-light);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 16px;
+        }
+        
+        .auth-tab:hover {
+            background-color: rgba(74, 111, 165, 0.05);
+        }
+        
+        .auth-tab.active {
+            background-color: var(--primary-color);
+            color: white;
+        }
 
         .login-card:hover {
             transform: translateY(-5px);
@@ -553,18 +582,50 @@
         <div class="login-card">
             <div class="app-name">deadΠ</div>
             <div class="app-subtitle">局域网聊天应用</div>
-            <div class="form-group">
-                <label for="username">昵称</label>
-                <input type="text" id="username" placeholder="请输入您的昵称" required>
+            
+            <!-- 切换登录/注册 -->
+            <div class="auth-tabs">
+                <button class="auth-tab active" id="login-tab">登录</button>
+                <button class="auth-tab" id="register-tab">注册</button>
             </div>
-            <div class="form-group">
-                <label for="server">服务器地址</label>
-                <select id="server" required>
-                    <option value="">加载中...</option>
-                </select>
+            
+            <div id="login-form">
+                <div class="form-group">
+                    <label for="login-username">用户名</label>
+                    <input type="text" id="login-username" placeholder="请输入您的用户名" required>
+                </div>
+                <div class="form-group">
+                    <label for="login-password">密码</label>
+                    <input type="password" id="login-password" placeholder="请输入您的密码" required>
+                </div>
+                <div class="form-group">
+                    <label for="login-server">服务器地址</label>
+                    <select id="login-server" required>
+                        <option value="">加载中...</option>
+                    </select>
+                </div>
+                <button class="btn" id="login-btn">登录</button>
             </div>
-            <button class="btn" id="login-btn">登录</button>
-            <div class="error-message" id="login-error"></div>
+            
+            <div id="register-form" style="display: none;">
+                <div class="form-group">
+                    <label for="register-username">用户名</label>
+                    <input type="text" id="register-username" placeholder="请输入您的用户名" required>
+                </div>
+                <div class="form-group">
+                    <label for="register-password">密码</label>
+                    <input type="password" id="register-password" placeholder="请输入您的密码（不少于6位）" required>
+                </div>
+                <div class="form-group">
+                    <label for="register-server">服务器地址</label>
+                    <select id="register-server" required>
+                        <option value="">加载中...</option>
+                    </select>
+                </div>
+                <button class="btn" id="register-btn">注册</button>
+            </div>
+            
+            <div class="error-message" id="auth-error"></div>
         </div>
     </div>
 
@@ -629,10 +690,27 @@
         // DOM元素
         const loginContainer = document.getElementById('login-container');
         const chatContainer = document.getElementById('chat-container');
-        const usernameInput = document.getElementById('username');
-        const serverSelect = document.getElementById('server');
+        // 登录/注册相关元素
+        const loginTab = document.getElementById('login-tab');
+        const registerTab = document.getElementById('register-tab');
+        const loginForm = document.getElementById('login-form');
+        const registerForm = document.getElementById('register-form');
+        const loginError = document.getElementById('auth-error');
+        
+        // 登录表单元素
+        const loginUsernameInput = document.getElementById('login-username');
+        const loginPasswordInput = document.getElementById('login-password');
+        const loginServerSelect = document.getElementById('login-server');
         const loginBtn = document.getElementById('login-btn');
-        const loginError = document.getElementById('login-error');
+        
+        // 注册表单元素
+        const registerUsernameInput = document.getElementById('register-username');
+        const registerPasswordInput = document.getElementById('register-password');
+        const registerServerSelect = document.getElementById('register-server');
+        const registerBtn = document.getElementById('register-btn');
+        
+        // 服务器选择器（统一处理）
+        const serverSelects = [loginServerSelect, registerServerSelect];
         const messagesContainer = document.getElementById('messages-container');
         const messageInput = document.getElementById('message-input');
         const messageForm = document.getElementById('message-form');
@@ -653,18 +731,22 @@
             fetch('/config')
                 .then(response => response.json())
                 .then(config => {
-                    serverSelect.innerHTML = '';
-                    config.servers.forEach(server => {
-                        const option = document.createElement('option');
-                        option.value = server.address;
-                        option.textContent = server.name;
-                        serverSelect.appendChild(option);
+                    serverSelects.forEach(select => {
+                        select.innerHTML = '';
+                        config.servers.forEach(server => {
+                            const option = document.createElement('option');
+                            option.value = server.address;
+                            option.textContent = server.name;
+                            select.appendChild(option);
+                        });
                     });
                 })
                 .catch(error => {
                     console.error('加载服务器配置失败:', error);
                     // 默认添加本地服务器
-                    serverSelect.innerHTML = '<option value="http://localhost:5000">本地服务器</option>';
+                    serverSelects.forEach(select => {
+                        select.innerHTML = '<option value="http://localhost:5000">本地服务器</option>';
+                    });
                 });
         }
 
@@ -684,13 +766,52 @@
 
         // 设置事件监听器
         function setupEventListeners() {
+            // 切换登录/注册表单
+            loginTab.addEventListener('click', () => {
+                loginTab.classList.add('active');
+                registerTab.classList.remove('active');
+                loginForm.style.display = 'block';
+                registerForm.style.display = 'none';
+                loginError.textContent = '';
+            });
+            
+            registerTab.addEventListener('click', () => {
+                registerTab.classList.add('active');
+                loginTab.classList.remove('active');
+                registerForm.style.display = 'block';
+                loginForm.style.display = 'none';
+                loginError.textContent = '';
+            });
+            
             // 登录按钮点击事件
             loginBtn.addEventListener('click', handleLogin);
             
             // 回车登录
-            usernameInput.addEventListener('keypress', (e) => {
+            loginUsernameInput.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') {
                     handleLogin();
+                }
+            });
+            
+            loginPasswordInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    handleLogin();
+                }
+            });
+            
+            // 注册按钮点击事件
+            registerBtn.addEventListener('click', handleRegister);
+            
+            // 注册输入框回车键事件
+            registerUsernameInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    handleRegister();
+                }
+            });
+            
+            registerPasswordInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    handleRegister();
                 }
             });
             
@@ -720,11 +841,17 @@
 
         // 处理登录
         function handleLogin() {
-            const username = usernameInput.value.trim();
-            const server = serverSelect.value;
+            const username = loginUsernameInput.value.trim();
+            const password = loginPasswordInput.value.trim();
+            const server = loginServerSelect.value;
             
             if (!username) {
-                showError('请输入昵称');
+                showError('请输入用户名');
+                return;
+            }
+            
+            if (!password) {
+                showError('请输入密码');
                 return;
             }
             
@@ -733,9 +860,9 @@
                 return;
             }
             
-            // 验证昵称格式
+            // 验证用户名格式
             if (!/^[\u4e00-\u9fa5a-zA-Z0-9_]{2,20}$/.test(username)) {
-                showError('昵称只能包含中文、英文、数字和下划线，长度2-20个字符');
+                showError('用户名只能包含中文、英文、数字和下划线，长度2-20个字符');
                 return;
             }
             
@@ -745,7 +872,7 @@
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ username })
+                body: JSON.stringify({ username, password })
             })
             .then(response => response.json())
             .then(data => {
@@ -762,7 +889,67 @@
             })
             .catch(error => {
                 console.error('登录失败:', error);
-                showError('登录失败，请重试');
+                showError('登录失败，请检查网络连接');
+            });
+        }
+        
+        // 处理注册
+        function handleRegister() {
+            const username = registerUsernameInput.value.trim();
+            const password = registerPasswordInput.value.trim();
+            const server = registerServerSelect.value;
+            
+            if (!username) {
+                showError('请输入用户名');
+                return;
+            }
+            
+            if (!password) {
+                showError('请输入密码');
+                return;
+            }
+            
+            if (!server) {
+                showError('请选择服务器');
+                return;
+            }
+            
+            // 验证用户名格式
+            if (!/^[\u4e00-\u9fa5a-zA-Z0-9_]{2,20}$/.test(username)) {
+                showError('用户名只能包含中文、英文、数字和下划线，长度2-20个字符');
+                return;
+            }
+            
+            // 验证密码长度
+            if (password.length < 6) {
+                showError('密码长度不能少于6个字符');
+                return;
+            }
+            
+            // 发送注册请求
+            fetch('/register', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ username, password })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // 注册成功，自动切换到登录表单
+                    showError('注册成功，请登录');
+                    loginTab.click();
+                    loginUsernameInput.value = username;
+                    loginPasswordInput.value = password;
+                } else {
+                    // 注册失败
+                    showError(data.message);
+                }
+            })
+            .catch(error => {
+                console.error('注册失败:', error);
+                showError('注册失败，请检查网络连接');
             });
         }
 
@@ -787,22 +974,22 @@
             });
             
             socket.on('user_joined', (data) => {
-                updateUserList(data.online_users);
-                // 如果不是自己加入
-                if (data.username !== currentUsername) {
-                    addSystemMessage(`用户 ${data.username} 加入了聊天室`);
-                } else {
-                    addSystemMessage(`欢迎 ${data.username}！`);
-                }
-            });
-            
-            socket.on('user_disconnected', (data) => {
-                updateUserList(data.online_users);
-                addSystemMessage(`用户 ${data.username} 离开了聊天室`);
-            });
+            updateUserList(data.online_users);
+            // 如果不是自己加入
+            if (data.username !== currentUsername) {
+                addMessage('系统', `用户 ${data.username} 加入了聊天室`, new Date(), false, true);
+            } else {
+                addMessage('系统', `欢迎 ${data.username}！`, new Date(), false, true);
+            }
+        });
+        
+        socket.on('user_disconnected', (data) => {
+            updateUserList(data.online_users);
+            addMessage('系统', `用户 ${data.username} 离开了聊天室`, new Date(), false, true);
+        });
             
             socket.on('new_message', (data) => {
-                addMessage(data.username, data.message);
+                addMessage(data.username, data.message, data.timestamp || new Date());
             });
             
             socket.on('movie_command', (data) => {
@@ -810,7 +997,195 @@
             });
             
             socket.on('assistant_response', (data) => {
-                addMessage(data.username, data.message);
+                addMessage(data.username, data.message, data.timestamp || new Date());
+            });
+            
+            // 处理SSE流式响应
+            let currentAssistantMessage = null;
+            socket.on('assistant_response_chunk', (data) => {
+                if (!currentAssistantMessage) {
+                    // 创建新消息
+                    const messageElement = document.createElement('div');
+                    messageElement.className = 'message other';
+                    
+                    // 获取当前时间
+                    const currentTime = new Date();
+                    
+                    // 检查是否需要显示时间
+                    if (shouldShowTime(currentTime)) {
+                        // 创建时间元素
+                        const timeElement = document.createElement('div');
+                        timeElement.className = 'message-time';
+                        timeElement.textContent = formatTime(currentTime);
+                        messageElement.appendChild(timeElement);
+                        
+                        // 更新最后一条消息的时间
+                        lastMessageTime = currentTime;
+                    }
+                    
+                    // 消息头部
+                    const headerElement = document.createElement('div');
+                    headerElement.className = 'message-header';
+                    
+                    const usernameElement = document.createElement('span');
+                    usernameElement.className = 'message-username';
+                    usernameElement.textContent = data.username;
+                    
+                    headerElement.appendChild(usernameElement);
+                    
+                    // 消息内容
+                    const contentElement = document.createElement('div');
+                    contentElement.className = 'message-content';
+                    contentElement.textContent = data.message;
+                    
+                    messageElement.appendChild(headerElement);
+                    messageElement.appendChild(contentElement);
+                    
+                    messagesContainer.appendChild(messageElement);
+                    currentAssistantMessage = { element: messageElement, contentElement: contentElement, content: data.message };
+                } else {
+                    // 更新现有消息
+                    currentAssistantMessage.content += data.message;
+                    currentAssistantMessage.contentElement.textContent = currentAssistantMessage.content;
+                }
+                
+                // 滚动到底部
+                scrollToBottom();
+                
+                // 如果是最终消息，重置currentAssistantMessage
+                if (data.final) {
+                    currentAssistantMessage = null;
+                }
+            });
+            
+            // 监听天气响应事件，根据天气类型改变聊天背景
+            socket.on('weather_response', (data) => {
+                // 首先添加天气消息
+                addMessage(data.username, data.message, new Date());
+                
+                // 根据天气类型设置不同的背景颜色
+                const root = document.documentElement;
+                const weatherType = data.weather_type;
+                
+                // 定义不同天气类型对应的背景颜色
+                const weatherBackgrounds = {
+                    'sunny': '#FFF5D7', // 阳光明媚 - 浅黄色
+                    'cloudy': '#E5E8EC', // 多云 - 浅灰色
+                    'rainy': '#D4E6F1', // 下雨 - 浅蓝色
+                    'snowy': '#F2F3F4', // 下雪 - 接近白色
+                    'foggy': '#E8E9EA', // 雾天 - 浅灰色
+                    'thunderstorm': '#34495E', // 雷暴 - 深蓝色
+                    'default': '#f5f7fa' // 默认 - 浅蓝灰色
+                };
+                
+                // 设置背景颜色
+                const backgroundColor = weatherBackgrounds[weatherType] || weatherBackgrounds['default'];
+                root.style.setProperty('--background-color', backgroundColor);
+            });
+            
+            // 创建全局音频元素用于音乐播放
+            let audioElement = null;
+            let currentSongId = null;
+            
+            // 监听音乐响应事件
+            socket.on('music_response', (data) => {
+                const songInfo = data.song_info;
+                
+                // 创建音乐卡片HTML
+                const musicCardHtml = `
+                    <div style='margin-bottom: 20px;'>
+                        <h4 style='margin: 5px 0;'>🎵 ${songInfo.song_name} - ${songInfo.artist}</h4>
+                        ${songInfo.album_pic_url ? `<img src='${songInfo.album_pic_url}' style='width: 100px; height: 100px; border-radius: 5px; margin: 10px 0;'>` : ''}
+                        <div style='margin: 15px 0;'>
+                            <h5 style='margin: 5px 0;'>在线播放</h5>
+                            <div id='music-player'>
+                                <audio id='audio-player' controls style='width: 100%; max-width: 300px; margin: 10px 0;'>
+                                    <source src='${songInfo.play_url}' type='audio/mpeg'>
+                                    您的浏览器不支持音频播放功能。
+                                </audio>
+                            </div>
+                        </div>
+                        <p style='font-size: 12px; color: #666; margin: 5px 0;'>专辑：${songInfo.album}</p>
+                    </div>
+                    <p style='font-size: 12px; color: #666; margin: 5px 0;'>提示：如果直接播放失败，可能是由于版权限制，请尝试点击平台链接播放。</p>
+                `;
+                
+                // 添加音乐消息
+                addMessage(data.username, musicCardHtml, new Date());
+                
+                // 初始化音频元素
+                setTimeout(() => {
+                    audioElement = document.getElementById('audio-player');
+                    if (audioElement) {
+                        currentSongId = songInfo.song_name + '-' + songInfo.artist;
+                        
+                        // 添加播放事件监听
+                        audioElement.addEventListener('play', () => {
+                            socket.emit('control_music', {
+                                'action': 'play',
+                                'currentTime': audioElement.currentTime
+                            });
+                        });
+                        
+                        audioElement.addEventListener('pause', () => {
+                            socket.emit('control_music', {
+                                'action': 'pause',
+                                'currentTime': audioElement.currentTime
+                            });
+                        });
+                        
+                        audioElement.addEventListener('ended', () => {
+                            socket.emit('control_music', {
+                                'action': 'stop',
+                                'currentTime': 0
+                            });
+                        });
+                        
+                        audioElement.addEventListener('timeupdate', () => {
+                            // 定期发送当前播放时间（每1秒）
+                            if (!audioElement.paused && Date.now() % 1000 < 100) {
+                                socket.emit('control_music', {
+                                    'action': 'play',
+                                    'currentTime': audioElement.currentTime
+                                });
+                            }
+                        });
+                    }
+                }, 100);
+            });
+            
+            // 监听音乐播放状态更新事件
+            socket.on('music_playback_update', (data) => {
+                const playbackState = data.playback_state;
+                const songInfo = data.song_info;
+                
+                // 检查是否是同一首歌
+                const newSongId = songInfo.song_name + '-' + songInfo.artist;
+                if (currentSongId !== newSongId) {
+                    // 如果是新歌曲，不需要更新播放状态
+                    return;
+                }
+                
+                // 更新音频元素状态
+                if (audioElement) {
+                    if (playbackState.status === 'playing') {
+                        if (audioElement.paused) {
+                            audioElement.play();
+                        }
+                    } else if (playbackState.status === 'paused') {
+                        if (!audioElement.paused) {
+                            audioElement.pause();
+                        }
+                    } else if (playbackState.status === 'stopped') {
+                        audioElement.pause();
+                        audioElement.currentTime = 0;
+                    }
+                    
+                    // 更新播放时间
+                    if (Math.abs(audioElement.currentTime - playbackState.currentTime) > 1) {
+                        audioElement.currentTime = playbackState.currentTime;
+                    }
+                }
             });
         }
 
@@ -842,18 +1217,25 @@
             loginContainer.style.display = 'flex';
             
             // 清空输入框
-            usernameInput.value = '';
+            loginUsernameInput.value = '';
+            loginPasswordInput.value = '';
+            registerUsernameInput.value = '';
+            registerPasswordInput.value = '';
             messageInput.value = '';
         }
 
         // 添加消息
-        function addMessage(username, message) {
+        function addMessage(username, message, timestamp = new Date(), isSelf = false, isSystem = false) {
             const messageElement = document.createElement('div');
-            // 设置消息样式类，区分自己和他人的消息
-            messageElement.className = username === currentUsername ? 'message own' : 'message other';
+            // 设置消息样式类，区分自己、他人和系统消息
+            if (isSystem) {
+                messageElement.className = 'message system-message';
+            } else {
+                messageElement.className = username === currentUsername ? 'message own' : 'message other';
+            }
             
             // 获取当前时间
-            const currentTime = new Date();
+            const currentTime = timestamp || new Date();
             
             // 检查是否需要显示时间
             if (shouldShowTime(currentTime)) {
@@ -881,9 +1263,16 @@
             const contentElement = document.createElement('div');
             contentElement.className = 'message-content';
             
-            // 处理@用户提醒
+            // 处理@用户提醒，保留HTML内容以支持音乐播放器
             const processedMessage = processMessageWithMentions(message);
             contentElement.innerHTML = processedMessage;
+            
+            // 如果是系统消息，添加特殊样式
+            if (isSystem) {
+                headerElement.style.textAlign = 'center';
+                contentElement.style.textAlign = 'center';
+                contentElement.style.fontStyle = 'italic';
+            }
             
             messageElement.appendChild(headerElement);
             messageElement.appendChild(contentElement);
